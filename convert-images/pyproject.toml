@@ -1,0 +1,47 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = [ "setuptools", "wheel" ]
+
+[project]
+name = "convert-images"
+version = "0.1.0"
+description = "Batch image converter GUI using PySide6 and Pillow"
+readme = "README.md"
+authors = [ { name = "Dobatymo" } ]
+requires-python = ">=3.13"
+classifiers = [ "Programming Language :: Python :: 3 :: Only", "Programming Language :: Python :: 3.13" ]
+dependencies = [
+  "pillow>=11.3",
+  "pillow-heif>=1",
+  "pyside6>=6.9.1",
+]
+scripts.batch-image-converter = "main:main"
+
+[dependency-groups]
+dev = [
+  "pyinstaller>=6.14.1",
+  "pytest>=8.4.1",
+]
+
+[tool.ruff]
+line-length = 120
+lint.extend-select = [
+  "ASYNC",
+  "B",
+  "I",
+  "ICN",
+  "LOG",
+  "NPY",
+  "PIE",
+  "PLE",
+  "SIM",
+  "W",
+]
+
+[tool.pytest.ini_options]
+pythonpath = [ "." ]
+
+[tool.bandit]
+skips = [
+  "B101",
+]
