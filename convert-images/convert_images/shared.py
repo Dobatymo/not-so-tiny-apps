@@ -32,7 +32,7 @@ unsupported_modes_format = {
 }
 
 
-def convert_image(src: Path, dest: Path) -> bool:
+def convert_image(src: Path, dest: Path) -> None:
     extensions = registered_extensions()
     dest_format = extensions[dest.suffix]
     unsupported_modes = unsupported_modes_format.get(dest_format, ())
@@ -40,7 +40,8 @@ def convert_image(src: Path, dest: Path) -> bool:
     assert fallback not in unsupported_modes
 
     with Image.open(src) as img:
-        if img.mode in unsupported_modes:
+        src_mode = img.mode
+        if src_mode in unsupported_modes:
             img = img.convert(fallback)
-            logger.warning("Format %s doesn't support mode %s, converting to %s", dest_format, img.mode, fallback)
+            logger.warning("Format %s doesn't support mode %s, converting to %s", dest_format, src_mode, fallback)
         img.save(dest)

@@ -1,0 +1,50 @@
+[project]
+name = "591-viewer"
+version = "0.1.0"
+description = "Add your description here"
+readme = "readme.md"
+requires-python = ">=3.13"
+classifiers = [ "Programming Language :: Python :: 3 :: Only", "Programming Language :: Python :: 3.13" ]
+dependencies = [
+  "beautifulsoup4>=4.13.4",
+  "curl-cffi>=0.12",
+  "genutility[cache,rich]>=0.0.114",
+  "html5lib>=1.1",
+  "playwright>=1.53",
+  "playwright-stealth>=2",
+  "rich>=14",
+]
+
+[dependency-groups]
+dev = [
+  "pyinstaller>=6.14.2",
+  "pytest>=8.3.5",
+]
+
+[tool.setuptools]
+packages = [ "fivenineone" ]
+
+[tool.ruff]
+line-length = 120
+lint.extend-select = [
+  "ASYNC",
+  "B",
+  "I",
+  "ICN",
+  "LOG",
+  "NPY",
+  "PIE",
+  "PLE",
+  "SIM",
+  "W",
+]
+lint.ignore = [ "B011" ]
+
+[tool.mypy]
+ignore_missing_imports = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_unreachable = true
+strict_equality = true

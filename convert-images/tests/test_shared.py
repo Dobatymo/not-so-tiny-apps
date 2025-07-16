@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pillow_heif import register_heif_opener
 
-from utils import IMAGE_EXTENSIONS_READ, IMAGE_EXTENSIONS_WRITE, convert_image
+from convert_images.shared import IMAGE_EXTENSIONS_READ, IMAGE_EXTENSIONS_WRITE, convert_image
 
 logger = logging.getLogger(__name__)
 

@@ -33,28 +33,34 @@ repos:
   rev: v2.6.0
   hooks:
   - id: pyproject-fmt
+- repo: https://github.com/aufdenpunkt/pre-commit-js-beautify
+  rev: 1.13.0
+  hooks:
+  - id: js-beautify
+    files: \.js$
+    args: [--type, js]
 - repo: https://github.com/asottile/pyupgrade
   rev: v3.20.0
   hooks:
   - id: pyupgrade
     args: [--py313-plus]
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.12.1
+  rev: v0.12.3
   hooks:
   - id: ruff-check
     args: [--fix]
   - id: ruff-format
 - repo: https://github.com/PyCQA/bandit
-  rev: 1.8.5
+  rev: 1.8.6
   hooks:
   - id: bandit
     args: [-c, pyproject.toml]
     additional_dependencies: ['.[toml]']
 - repo: https://github.com/pre-commit/mirrors-mypy
-  rev: v1.16.1
+  rev: v1.17.0
   hooks:
   - id: mypy
-    args: [--install-types, --non-interactive, --show-error-codes, --show-traceback]
+    args: [--install-types, --non-interactive, --show-error-codes, --show-traceback, --explicit-package-bases]
     additional_dependencies:
     - typing-extensions==4.12.2
 - repo: https://github.com/Yelp/detect-secrets
