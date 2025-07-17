@@ -1,23 +1,45 @@
 import errno
 import ipaddress
 import logging
-import os
 import random
 import re
 import socket
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator
 from enum import Enum, auto
 from struct import calcsize, pack, unpack
 from typing import Self
 
 from genutility.callbacks import Progress
 from genutility.iter import no_dupes
-from scapy.all import IP_PROTOS
 
 IpAddrT = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 logger = logging.getLogger(__name__)
+
+ICMP_ECHO_IDENTIFIER = random.randrange(0, 2**16)
+
+
+class IpProtocols(Enum):
+    IP = 0
+    ICMP = 1
+    GGP = 3
+    TCP = 6
+    EGP = 8
+    PUP = 12
+    UDP = 17
+    HMP = 20
+    XNS_IDP = 22
+    RDP = 27
+    IPV6 = 41
+    IPV6_ROUTE = 43
+    IPV6_FRAG = 44
+    ESP = 50
+    AH = 51
+    IPV6_ICMP = 58
+    IPV6_NONXT = 59
+    IPV6_OPTS = 60
+    RVD = 66
 
 
 class PortStatus(Enum):
@@ -29,8 +51,8 @@ class PortStatus(Enum):
 
 
 class IpStatus(Enum):
-    AVAILABLE = auto()
-    UNAVAILABLE = auto()
+    REACHABLE = auto()
+    UNREACHABLE = auto()
     ERROR = auto()
 
 
@@ -38,6 +60,19 @@ class ScanType(Enum):
     TCP_SYN = "TCP SYN Scan"
     TCP_CONNECT = "TCP Connect Scan"
     UDP = "UDP Scan"
+    ICMP_ECHO = "ICMP Echo"
+
+
+class IterableWithLength:
+    def __init__(self, iterable: Iterable, length: int) -> None:
+        self._iterable = iterable
+        self._length = length
+
+    def __iter__(self) -> Iterator:
+        return iter(self._iterable)
+
+    def __len__(self) -> int:
+        return self._length
 
 
 def is_valid_hostname(host: str) -> bool:
@@ -85,7 +120,15 @@ def calc_checksum_2(data: bytes) -> int:
     return ~s & 0xFFFF
 
 
-class IPv4Header:
+class SlotsReprMixin:
+    def __repr__(self):
+        d = {name: getattr(self, name) for name in self.__slots__}
+
+        args = ", ".join(f"{k}={v}" for k, v in d.items() if v is not None)
+        return f"{self.__class__.__name__}({args})"
+
+
+class IPv4Header(SlotsReprMixin):
     __slots__ = (
         "version",
         "ihl",
@@ -113,7 +156,7 @@ class IPv4Header:
         identification: int | None = None,
         flags_fragment_offset=0,
         ttl=255,
-        protocol=IP_PROTOS.tcp,
+        protocol=IpProtocols.TCP,
         header_checksum=0,
     ):
         self.version = version
@@ -139,7 +182,7 @@ class IPv4Header:
             self.identification,
             self.flags_fragment_offset,
             self.ttl,
-            self.protocol,
+            self.protocol.value,
             self.header_checksum,  # kernel will fill the correct checksum
             socket.inet_aton(str(self.source_addr)),
             socket.inet_aton(str(self.destination_addr)),
@@ -177,23 +220,12 @@ class IPv4Header:
             identification,
             flags_fragment_offset,
             ttl,
-            protocol,
+            IpProtocols(protocol),
             header_checksum,
         )
 
-    def __repr__(self):
-        d = {name: getattr(self, name) for name in self.__slots__}
 
-        try:
-            d["protocol"] = IP_PROTOS[d["protocol"]]
-        except KeyError:
-            d["protocol"] = f"UNKNOWN({d['protocol']})"
-
-        args = ", ".join(f"{k}={v}" for k, v in d.items())
-        return f"IPv4Header({args})"
-
-
-def resolve(hosts: Sequence[str]) -> Iterator[tuple[str, IpAddrT]]:
+def resolve(hosts: Iterable[str]) -> Iterator[tuple[str, IpAddrT]]:
     for host in hosts:
         try:
             start_time = time.time()
@@ -276,7 +308,7 @@ class TcpFlags:
         return f"TcpFlags({args})"
 
 
-class TCPv4Header:
+class TCPv4Header(SlotsReprMixin):
     __slots__ = (
         "src_port",
         "dst_port",
@@ -311,6 +343,9 @@ class TCPv4Header:
         self.tcp_check = tcp_check
         self.urgent_pointer = urgent_pointer
 
+    def __len__(self) -> int:
+        return calcsize("HHLLBBHHH")
+
     def to_bytes(self) -> bytes:
         data_offset_reserved = self.data_offset << 4
 
@@ -329,9 +364,6 @@ class TCPv4Header:
             + pack("H", self.tcp_check)
             + pack("!H", self.urgent_pointer)
         )
-
-    def __len__(self) -> int:
-        return calcsize("HHLLBBHHH")
 
     @classmethod
     def from_bytes(cls, data: bytes) -> Self:
@@ -406,7 +438,61 @@ class IcmpType(Enum):
     EXTENDED_ECHO_REPLY = 43
 
 
-class IcmpHeader:
+class Icmpv6Type(Enum):
+    DESTINATION_UNREACHABLE = 1
+    PACKET_TOO_BIG = 2
+    TIME_EXCEEDED = 3
+    PARAMETER_PROBLEM = 4
+    ECHO_REQUEST = 128
+    ECHO_REPLY = 129
+    MULTICAST_LISTENER_QUERY = 130
+    MULTICAST_LISTENER_REPORT = 131
+    MULTICAST_LISTENER_DONE = 132
+    ROUTER_SOLICITATION = 133
+    ROUTER_ADVERTISEMENT = 134
+    NEIGHBOR_SOLICITATION = 135
+    NEIGHBOR_ADVERTISEMEN = 136
+    REDIRECT_MESSAGE = 137
+    ROUTER_RENUMBERING = 138
+    ICMP_NODE_INFORMATION_QUERY = 139
+    ICMP_NODE_INFORMATION_RESPONSE = 140
+    INVERSE_NEIGHBOR_DISCOVERY_SOLICITATION_MESSAGE = 141
+    INVERSE_NEIGHBOR_DISCOVERY_ADVERTISEMENT_MESSAGE = 142
+    MULTICAST_LISTENER_DISCOVERY_REPORTS = 143
+    HOME_AGENT_ADDRESS_DISCOVERY_REQUEST_MESSAGE = 144
+    HOME_AGENT_ADDRESS_DISCOVERY_REPLY_MESSAGE = 145
+    MOBILE_PREFIX_SOLICITATION = 146
+    MOBILE_PREFIX_ADVERTISEMENT = 147
+    CERTIFICATION_PATH_SOLICITATION = 148
+    CERTIFICATION_PATH_ADVERTISEMENT = 149
+    MULTICAST_ROUTER_ADVERTISEMENT = 151
+    MULTICAST_ROUTER_SOLICITATION = 152
+    MULTICAST_ROUTER_TERMINATION = 153
+    RPL_CONTROL_MESSAGE = 155
+    EXTENDED_ECHO_REQUEST = 160
+    EXTENDED_ECHO_REPLY = 161
+
+
+class DestinationUnreachable(Enum):
+    NET_UNREACHABLE = 0
+    HOST_UNREACHABLE = 1
+    PROTOCOL_UNREACHABLE = 2
+    PORT_UNREACHABLE = 3
+    FRAGMENTATION_NEEDED = 4
+    SOURCE_ROUTE_FAILED = 5
+    DESTINATION_NETWORK_UNKNOWN = 6
+    DESTINATION_HOST_UNKNOWN = 7
+    SOURCE_HOST_ISOLATED = 8
+    COMMUNICATION_WITH_DESTINATION_NETWORK_IS_ADMINISTRATIVELY_PROHIBITED = 9
+    COMMUNICATION_WITH_DESTINATION_HOST_IS_ADMINISTRATIVELY_PROHIBITED = 10
+    DESTINATION_NETWORK_UNREACHABLE_FOR_TYPE_OF_SERVICE = 11
+    DESTINATION_HOST_UNREACHABLE_FOR_TYPE_OF_SERVICE = 12
+    COMMUNICATION_ADMINISTRATIVELY_PROHIBITED = 13
+    HOST_PRECEDENCE_VIOLATION = 14
+    PRECEDENCE_CUTOFF_IN_EFFECT = 15
+
+
+class IcmpHeader(SlotsReprMixin):
     __slots__ = (
         "type",
         "code",
@@ -420,20 +506,28 @@ class IcmpHeader:
         icmp_type: IcmpType,
         code: int,
         checksum: int = 0,
+        *,
         identifier: int | None = None,
         sequence: int | None = None,
+        length: int | None = None,
+        next_hop_mtu: int | None = None,
     ):
         self.type = icmp_type
         self.code = code
         self.checksum = checksum
         self.identifier = identifier
         self.sequence = sequence
+        self.length = length
+        self.next_hop_mtu = next_hop_mtu
 
     def to_bytes(self) -> bytes:
-        if self.type == IcmpType.ECHO_REQUEST:
+        if self.type in (IcmpType.ECHO_REQUEST, IcmpType.ECHO_REPLY):
+            assert self.code == 0
             assert self.identifier is not None
             assert self.sequence is not None
             return pack("!BBHHH", self.type.value, self.code, self.checksum, self.identifier, self.sequence)
+        elif self.type in (IcmpType.DESTINATION_UNREACHABLE,):
+            return pack("!BBHBBH", self.type.value, self.code, self.checksum, 0, self.length, self.next_hop_mtu)
         else:
             raise ValueError(f"Unsupported type: {self.type}")
 
@@ -444,58 +538,187 @@ class IcmpHeader:
         icmp_type = IcmpType(_type)
 
         if icmp_type in (IcmpType.ECHO_REQUEST, IcmpType.ECHO_REPLY):
+            assert code == 0
             identifier, sequence = unpack("!HH", rest)
-            return cls(icmp_type, code, checksum, identifier, sequence)
+            return cls(icmp_type, code, checksum, identifier=identifier, sequence=sequence)
+        if icmp_type in (IcmpType.DESTINATION_UNREACHABLE,):
+            _code = DestinationUnreachable(code)
+            _unused, length, next_hop_mtu = unpack("!BBH", rest)
+            return cls(icmp_type, _code.value, checksum, length=length, next_hop_mtu=next_hop_mtu)
         else:
             raise ValueError(f"Unsupported type: {icmp_type}")
 
-    def __repr__(self):
-        d = {name: getattr(self, name) for name in self.__slots__}
 
-        args = ", ".join(f"{k}={v}" for k, v in d.items() if v is not None)
-        return f"IcmpHeader({args})"
+class Icmpv6Header(SlotsReprMixin):
+    __slots__ = (
+        "type",
+        "code",
+        "checksum",
+        "identifier",
+        "sequence",
+    )
+
+    def __init__(
+        self,
+        icmp_type: Icmpv6Type,
+        code: int,
+        checksum: int = 0,
+        *,
+        identifier: int | None = None,
+        sequence: int | None = None,
+    ):
+        self.type = icmp_type
+        self.code = code
+        self.checksum = checksum
+        self.identifier = identifier
+        self.sequence = sequence
+
+    def to_bytes(self) -> bytes:
+        if self.type in (Icmpv6Type.ECHO_REQUEST, Icmpv6Type.ECHO_REPLY):
+            assert self.code == 0
+            assert self.identifier is not None
+            assert self.sequence is not None
+            return pack("!BBHHH", self.type.value, self.code, self.checksum, self.identifier, self.sequence)
+        else:
+            raise ValueError(f"Unsupported type: {self.type}")
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> Self:
+        _type, code, checksum, rest = unpack("!BBH4s", data)
+
+        icmp_type = Icmpv6Type(_type)
+
+        if icmp_type in (Icmpv6Type.ECHO_REQUEST, Icmpv6Type.ECHO_REPLY):
+            assert code == 0
+            identifier, sequence = unpack("!HH", rest)
+            return cls(icmp_type, code, checksum, identifier=identifier, sequence=sequence)
+        else:
+            raise ValueError(f"Unsupported type: {icmp_type}")
 
 
 def create_icmp_echo_request(identifier: int, sequence: int, payload: bytes) -> bytes:
     """Build ICMP Echo Request packet"""
 
-    header = IcmpHeader(IcmpType.ECHO_REQUEST, 0, 0, identifier, sequence).to_bytes()
+    header = IcmpHeader(IcmpType.ECHO_REQUEST, 0, 0, identifier=identifier, sequence=sequence).to_bytes()
     packet = header + payload
     checksum = calc_checksum_2(packet)
-    header = IcmpHeader(IcmpType.ECHO_REQUEST, 0, checksum, identifier, sequence).to_bytes()
+    header = IcmpHeader(IcmpType.ECHO_REQUEST, 0, checksum, identifier=identifier, sequence=sequence).to_bytes()
     return header + payload
 
 
-def ping(ip: IpAddrT, timeout: float | None = None) -> IpStatus:
+def create_icmp6_echo_request(identifier: int, sequence: int, payload: bytes) -> bytes:
+    """Build ICMPv6 Echo Request packet"""
+
+    header = Icmpv6Header(Icmpv6Type.ECHO_REQUEST, 0, 0, identifier=identifier, sequence=sequence).to_bytes()
+    packet = header + payload
+    checksum = calc_checksum_2(packet)  # checksum might be wrong?
+    header = Icmpv6Header(Icmpv6Type.ECHO_REQUEST, 0, checksum, identifier=identifier, sequence=sequence).to_bytes()
+    return header + payload
+
+
+def pingv4(ip: ipaddress.IPv4Address, sequence: int, payload: bytes, timeout: float | None = None) -> IpStatus:
     host = str(ip)
 
-    if isinstance(ip, ipaddress.IPv4Address):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
-        if timeout is not None:
-            sock.settimeout(timeout)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+    if timeout is not None:
+        sock.settimeout(timeout)
 
-        # Packet parameters
-        identifier = os.getpid() & 0xFFFF
-        sequence = 1
-        payload = b"hello from raw ICMP"  # any payload
+    identifier = ICMP_ECHO_IDENTIFIER
+    packet = create_icmp_echo_request(identifier, sequence, payload)
 
-        packet = create_icmp_echo_request(identifier, sequence, payload)
-    else:
-        raise ValueError(f"Unsupported IP: {ip}")
+    sock.sendto(packet, (host, 0))
+
+    try:
+        data, (dest_host, dest_port) = sock.recvfrom(1024)
+        # IPv4 headers are included
+        icmp_header = IcmpHeader.from_bytes(data[20:28])
+        icmp_payload = data[28:]
+        if icmp_header.type == IcmpType.ECHO_REPLY:
+            if identifier != icmp_header.identifier:
+                logger.warning(
+                    "ICMP echo reply identifier doesn't match request identifier: %r / %r",
+                    identifier,
+                    icmp_header.identifier,
+                )
+            if sequence != icmp_header.sequence:
+                logger.warning(
+                    "ICMP echo reply sequence doesn't match request sequence: %r / %r", sequence, icmp_header.sequence
+                )
+            if payload != icmp_payload:
+                logger.warning("ICMP echo reply payload doesn't match request payload: %r / %r", payload, icmp_payload)
+            return IpStatus.REACHABLE
+        elif icmp_header.type == IcmpType.DESTINATION_UNREACHABLE:
+            logger.debug(
+                "%s: destination unreachable (code=%d: %s)",
+                dest_host,
+                icmp_header.code,
+                DestinationUnreachable(icmp_header.code).name,
+            )
+            return IpStatus.UNREACHABLE
+        else:
+            ipv4_header = IPv4Header.from_bytes(data[0:20])
+            logger.error(
+                "%s: unexpected ICMP response (type=%d: %s)", dest_host, icmp_header.type.value, icmp_header.type.name
+            )
+            logger.debug("IPv4 header: %s", ipv4_header)
+            logger.debug("ICMP header: %s", icmp_header)
+            return IpStatus.ERROR
+
+    except TimeoutError:
+        return IpStatus.UNREACHABLE
+
+
+def pingv6(ip: ipaddress.IPv6Address, sequence: int, payload: bytes, timeout: float | None = None) -> IpStatus:
+    host = str(ip)
+
+    sock = socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_ICMPV6)
+    if timeout is not None:
+        sock.settimeout(timeout)
+
+    identifier = ICMP_ECHO_IDENTIFIER
+    packet = create_icmp6_echo_request(identifier, sequence, payload)
 
     sock.sendto(packet, (host, 0))
 
     try:
         data, addr = sock.recvfrom(1024)
-        ipv4_header = IPv4Header.from_bytes(data[0:20])
-        icmp_header = IcmpHeader.from_bytes(data[20:28])
-        if icmp_header.type == IcmpType.ECHO_REPLY:
-            return IpStatus.AVAILABLE
+        # IPv6 headers are not included
+        icmp_header = Icmpv6Header.from_bytes(data[:8])
+        icmp_payload = data[8:]
+        if icmp_header.type == Icmpv6Type.ECHO_REPLY:
+            if identifier != icmp_header.identifier:
+                logger.warning(
+                    "ICMPv6 echo reply identifier doesn't match request identifier: %r / %r",
+                    identifier,
+                    icmp_header.identifier,
+                )
+            if sequence != icmp_header.sequence:
+                logger.warning(
+                    "ICMPv6 echo reply sequence doesn't match request sequence: %r / %r", sequence, icmp_header.sequence
+                )
+            if payload != icmp_payload:
+                logger.warning(
+                    "ICMPv6 echo reply payload doesn't match request payload: %r / %r", payload, icmp_payload
+                )
+            return IpStatus.REACHABLE
         else:
-            print(addr, ipv4_header, icmp_header)
+            print(addr, icmp_header)
             return IpStatus.ERROR
+
     except TimeoutError:
-        return IpStatus.UNAVAILABLE
+        return IpStatus.UNREACHABLE
+
+
+def ping(ip: IpAddrT, sequence: int = 0, payload: bytes | None = None, timeout: float | None = None) -> IpStatus:
+    if payload is None:
+        payload = random.randbytes(32)
+
+    if isinstance(ip, ipaddress.IPv4Address):
+        return pingv4(ip, sequence, payload, timeout)
+    elif isinstance(ip, ipaddress.IPv6Address):
+        return pingv6(ip, sequence, payload, timeout)
+    else:
+        raise ValueError(f"Unsupported IP: {ip}")
 
 
 def scan(
@@ -523,7 +746,7 @@ def scan(
             status = PortStatus.OPEN
         elif result in (errno.ECONNREFUSED,):
             status = PortStatus.CLOSED
-        elif result in (errno.EAGAIN,):
+        elif result in (errno.EAGAIN, errno.EWOULDBLOCK):
             status = PortStatus.FILTERED
         elif result in (errno.ENETUNREACH,):
             status = PortStatus.ERROR
@@ -560,11 +783,11 @@ def scan(
             raise ValueError("src_ip required for TCP SYN scan")
 
         if isinstance(ip, ipaddress.IPv4Address):
-            # sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
+            # sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)  # IPPROTO_RAW is kinda broken
             sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
         elif isinstance(ip, ipaddress.IPv6Address):
-            # sock = socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_RAW)
+            # sock = socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_RAW)  # IPPROTO_RAW is kinda broken
             sock = socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_TCP)
             sock.setsockopt(socket.IPPROTO_IP, socket.IPV6_HDRINCL, 1)
         else:
@@ -628,8 +851,42 @@ def get_source_ip(dest_ip: IpAddrT) -> IpAddrT:
 ScanReturnT = tuple[IpAddrT, int | None, float, PortStatus | IpStatus]
 
 
+def ping_ips(
+    ips: Iterable[IpAddrT], progress: Progress | None = None, timeout: float | None = None
+) -> Iterator[ScanReturnT]:
+    progress = progress or Progress()
+
+    for host in progress.track(ips, description="IPs", transient=True):
+        logger.debug("Pinging %s", host)
+        try:
+            start_time = time.time()
+            status = ping(host, timeout=timeout)
+            elapsed = time.time() - start_time
+            yield (host, None, elapsed, status)
+        except ValueError as e:
+            print("ping failed", e)
+
+
+def ping_hosts(
+    hosts: Iterable[str],
+    progress: Progress | None = None,
+    timeout: float | None = None,
+) -> Iterator[ScanReturnT]:
+    ips = list(no_dupes(ip for hostname, ip in resolve(hosts)))
+
+    yield from ping_ips(ips, progress, timeout)
+
+
+def ping_network(
+    network: ipaddress.IPv4Network | ipaddress.IPv6Network,
+    progress: Progress | None = None,
+    timeout: float | None = None,
+) -> Iterator[ScanReturnT]:
+    yield from ping_ips(IterableWithLength(network.hosts(), network.num_addresses), progress, timeout)
+
+
 def scan_ports_ips(
-    ips: Sequence[IpAddrT],
+    ips: Iterable[IpAddrT],
     port_range: tuple[int, int],
     progress: Progress | None = None,
     scan_type: ScanType = ScanType.TCP_CONNECT,
@@ -649,41 +906,36 @@ def scan_ports_ips(
     status: PortStatus | IpStatus
     progress = progress or Progress()
 
-    with progress.task(len(ips), "IPs") as host_task:
-        for host in ips:
-            if src_ip is None:
-                try:
-                    src_ip = get_source_ip(host)
-                except ValueError as e:
-                    logger.warning("Skipping %s: %s", host, e)
-                    if progress is not None:
-                        host_task.advance(1)
-                    continue
-
+    for host in progress.track(ips, description="IPs"):
+        if src_ip is None:
             try:
-                start_time = time.time()
-                status = ping(host, timeout)
-                elapsed = time.time() - start_time
-                yield (host, None, elapsed, status)
+                src_ip = get_source_ip(host)
             except ValueError as e:
-                print("ping failed", e)
+                logger.warning("Skipping %s: %s", host, e)
+                continue
 
-            with progress.task(num_ports, f"Scanning {host}") as port_task:
-                for port in range(min_port, max_port + 1):
-                    try:
-                        start_time = time.time()
-                        status = scan(host, port, scan_type, timeout, src_ip, src_port)
-                        elapsed = time.time() - start_time
-                        yield (host, port, elapsed, status)
-                    except ValueError as e:
-                        print("scan failed", e)
-                    port_task.advance(1)
+        try:
+            start_time = time.time()
+            status = ping(host, timeout=timeout)
+            elapsed = time.time() - start_time
+            yield (host, None, elapsed, status)
+        except ValueError as e:
+            print("ping failed", e)
 
-            host_task.advance(1)
+        with progress.task(num_ports, f"Scanning {host}") as port_task:
+            for port in range(min_port, max_port + 1):
+                try:
+                    start_time = time.time()
+                    status = scan(host, port, scan_type, timeout, src_ip, src_port)
+                    elapsed = time.time() - start_time
+                    yield (host, port, elapsed, status)
+                except ValueError as e:
+                    print("scan failed", e)
+                port_task.advance(1)
 
 
 def scan_ports_hosts(
-    hosts: Sequence[str],
+    hosts: Iterable[str],
     port_range: tuple[int, int],
     progress: Progress | None = None,
     scan_type: ScanType = ScanType.TCP_CONNECT,

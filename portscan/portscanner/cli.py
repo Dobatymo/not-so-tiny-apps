@@ -1,13 +1,20 @@
 import argparse
+import errno
 import ipaddress
+import logging
 
 from genutility.rich import Progress
+from rich.logging import RichHandler
 from rich.progress import Progress as RichProgress
 
 from portscanner.shared import (
+    IpStatus,
     PortStatus,
     ScanType,
     is_valid_hostname,
+    ping_hosts,
+    ping_ips,
+    ping_network,
     scan_ports_hosts,
     scan_ports_ips,
     scan_ports_network,
@@ -53,7 +60,7 @@ def main():
     parser.add_argument(
         "--scan-type",
         choices=[s.name.lower() for s in ScanType],
-        default=ScanType.TCP_SYN.name,
+        default=ScanType.TCP_SYN.name.lower(),
         help="Scan type",
     )
     parser.add_argument(
@@ -72,7 +79,19 @@ def main():
         type=int,
         help="Source port to be used for scanning for supported scan types. Usually a random high digit port will be used.",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable debug output",
+    )
     args = parser.parse_args()
+
+    FORMAT = "%(message)s"
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG, format=FORMAT, handlers=[RichHandler()])
+    else:
+        logging.basicConfig(level=logging.INFO, format=FORMAT, handlers=[RichHandler()])
 
     min_port = args.min_port
     max_port = args.max_port
@@ -84,40 +103,62 @@ def main():
     with RichProgress() as p:
         progress = Progress(p)
         try:
-            last_host = None
-            if args.subnet:
-                scan_iter = scan_ports_network(
-                    args.subnet,
-                    (min_port, max_port),
-                    progress=progress,
-                    scan_type=scan_type,
-                    timeout=timeout,
-                    src_ip=args.src_ip,
-                    src_port=args.src_port,
-                )
-            elif args.ips:
-                scan_iter = scan_ports_ips(
-                    args.ips,
-                    (min_port, max_port),
-                    progress=progress,
-                    scan_type=scan_type,
-                    timeout=timeout,
-                    src_ip=args.src_ip,
-                    src_port=args.src_port,
-                )
-            elif args.hosts:
-                scan_iter = scan_ports_hosts(
-                    args.hosts,
-                    (min_port, max_port),
-                    progress=progress,
-                    scan_type=scan_type,
-                    timeout=timeout,
-                    src_ip=args.src_ip,
-                    src_port=args.src_port,
-                )
+            if scan_type == ScanType.ICMP_ECHO:
+                if args.subnet:
+                    scan_iter = ping_network(
+                        args.subnet,
+                        progress=progress,
+                        timeout=timeout,
+                    )
+                elif args.ips:
+                    scan_iter = ping_ips(
+                        args.ips,
+                        progress=progress,
+                        timeout=timeout,
+                    )
+                elif args.hosts:
+                    scan_iter = ping_hosts(
+                        args.hosts,
+                        progress=progress,
+                        timeout=timeout,
+                    )
+                else:
+                    parser.error("You must specify one of --subnet, --ips, or --hosts.")
             else:
-                parser.error("You must specify one of --subnet, --ips, or --hosts.")
+                if args.subnet:
+                    scan_iter = scan_ports_network(
+                        args.subnet,
+                        (min_port, max_port),
+                        progress=progress,
+                        scan_type=scan_type,
+                        timeout=timeout,
+                        src_ip=args.src_ip,
+                        src_port=args.src_port,
+                    )
+                elif args.ips:
+                    scan_iter = scan_ports_ips(
+                        args.ips,
+                        (min_port, max_port),
+                        progress=progress,
+                        scan_type=scan_type,
+                        timeout=timeout,
+                        src_ip=args.src_ip,
+                        src_port=args.src_port,
+                    )
+                elif args.hosts:
+                    scan_iter = scan_ports_hosts(
+                        args.hosts,
+                        (min_port, max_port),
+                        progress=progress,
+                        scan_type=scan_type,
+                        timeout=timeout,
+                        src_ip=args.src_ip,
+                        src_port=args.src_port,
+                    )
+                else:
+                    parser.error("You must specify one of --subnet, --ips, or --hosts.")
 
+            last_host = None
             for host, port, elapsed, status in scan_iter:
                 if host != last_host:
                     progress.print(f"[bold]Results for {host}:[/bold]")
@@ -130,9 +171,28 @@ def main():
                     status_str = "[red]closed[/red]"
                 elif status == PortStatus.FILTERED:
                     status_str = "[magenta]filtered[/magenta]"
+                elif status == IpStatus.REACHABLE:
+                    status_str = "[green]reachable[/green]"
+                elif status == IpStatus.UNREACHABLE:
+                    status_str = "[red]unreachable[/red]"
                 else:
                     status_str = f"[white]{status.name.lower()}[/white]"
-                progress.print(f"  Port {port}: {status_str} (scanned in {elapsed:.4f}s)")
+
+                if port is None:
+                    progress.print(f"  Ping {status_str} (scanned in {elapsed:.4f}s)")
+                else:
+                    progress.print(f"  Port {port}: {status_str} (scanned in {elapsed:.4f}s)")
+
+        except PermissionError as e:
+            if e.winerror == errno.WSAEACCES:
+                progress.print(f"[red]Admin right are required for scan-type {args.scan_type}: {e}")
+            else:
+                raise
+        except OSError as e:
+            if e.errno == errno.ENETUNREACH:
+                logging.exception(f"[red]Unreachable network. Maybe IPv6 is not supported: {e}", extra={"markup": True})
+            else:
+                raise
         except KeyboardInterrupt:
             progress.print("[red]KeyboardInterrupt")
 
